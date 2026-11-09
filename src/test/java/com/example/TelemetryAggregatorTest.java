@@ -5,8 +5,8 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-  import java.time.Duration;
-  import java.time.Instant;
+import java.time.Duration;
+import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -71,12 +71,12 @@ class TelemetryAggregatorTest {
     @Test
     void errorsPerAttemptCountsEveryError() {
         List<TelemetryRecord> records = new ArrayList<>();
-        
+
         records.add(rec(CompileEventAdapter.CATEGORY, CompileEventAdapter.COMPILE_START));
         records.add(compileError("cannot find symbol"));
         records.add(compileError("cannot find symbol"));
         records.add(rec(CompileEventAdapter.CATEGORY, CompileEventAdapter.COMPILE_FAILED));
-        
+
         records.add(rec(CompileEventAdapter.CATEGORY, CompileEventAdapter.COMPILE_START));
         records.add(compileError("';' expected"));
         records.add(rec(CompileEventAdapter.CATEGORY, CompileEventAdapter.COMPILE_FAILED));
@@ -101,4 +101,33 @@ class TelemetryAggregatorTest {
         assertEquals(3, agg.runCount());
         assertEquals(1, agg.exceptionCount());
     }
+
+    private static TelemetryRecord at(String isoTime) {
+        TelemetryRecord r = rec(CompileEventAdapter.CATEGORY, CompileEventAdapter.COMPILE_START);
+        r.setTimeStamp(Instant.parse(isoTime));
+        return r;
+    }
+
+    @Test
+    void gapsLongerThanThresholdCountAsIdle() {
+        TelemetryAggregator agg = new TelemetryAggregator(List.of(
+                at("2026-11-09T10:00:00Z"),
+                at("2026-11-09T10:02:00Z"), // 2 min gap -> active
+                at("2026-11-09T10:12:00Z"), // 10 min gap -> idle
+                at("2026-11-09T10:13:00Z")), // 1 min gap -> active
+                Duration.ofMinutes(5));
+
+        assertEquals(Duration.ofMinutes(13), agg.sessionSpan());
+        assertEquals(Duration.ofMinutes(10), agg.idleTime());
+        assertEquals(Duration.ofMinutes(3), agg.activeTime());
+    }
+
+    @Test
+    void singleEventHasNoSpan() {
+        TelemetryAggregator agg = new TelemetryAggregator(List.of(at("2026-11-09T10:00:00Z")));
+
+        assertEquals(Duration.ZERO, agg.sessionSpan());
+        assertEquals(Duration.ZERO, agg.activeTime());
+    }
+
 }
