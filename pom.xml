@@ -99,13 +99,13 @@
                 </executions>
             </plugin>
 
-            <!-- Coverage report: mvn clean verify -> target/site/jacoco/index.html -->
+            <!-- Coverage: mvn clean verify -> target/site/jacoco/index.html -->
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
                 <version>0.8.14</version>
                 <executions>
-                                        <execution>
+                    <execution>
                         <id>prepare-agent</id>
                         <goals><goal>prepare-agent</goal></goals>
                         <configuration>
@@ -114,6 +114,18 @@
                                 <exclude>javax/**</exclude>
                                 <exclude>jdk/**</exclude>
                                 <exclude>sun/**</exclude>
+                            </excludes>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>verify</phase>
+                        <goals><goal>report</goal></goals>
+                        <configuration>
+                            <excludes>
+                                <!-- BlueJ integration layer: needs a running BlueJ, verified manually -->
+                                <exclude>com/example/SimpleExtension.class</exclude>
+                                <exclude>com/example/TelemetryListener.class</exclude>
                             </excludes>
                         </configuration>
                     </execution>
