@@ -1,60 +1,46 @@
 package com.example;
 
-import java.util.List;
-
-import bluej.extensions2.BPackage;
 import bluej.extensions2.BlueJ;
 import bluej.extensions2.Extension;
-import bluej.extensions2.event.ClassEvent;
-import bluej.extensions2.event.CompileEvent;
-import bluej.extensions2.event.ExtensionEvent;
-import bluej.extensions2.event.ExtensionEventListener;
-import bluej.extensions2.event.InvocationFinishedEvent;
-import bluej.extensions2.event.PackageEvent;
 
-/*
- * This is the starting point of a BlueJ Extension
- */
+/** Entry point of the BlueJ Telemetry extension. BlueJ finds it through Main-Class in the jar manifest. */
 public class SimpleExtension extends Extension {
-    /*
-     * When this method is called, the extension may start its work.
-     */
+
+    private TelemetryListener listener;
+
     @Override
     public void startup(BlueJ bluej) {
-
-        System.out.println("EXTENSION STARTED");
-
-        TelemetryListener listener = new TelemetryListener();
-
+        listener = new TelemetryListener();
         bluej.addExtensionEventListener(listener);
         bluej.setMenuGenerator(new TelemetryMenu(listener));
-
-        System.out.println("EVENT LISTENER REGISTERED");
-    }
-
-    @Override
-    public boolean isCompatible() {
-        return (getExtensionsAPIVersionMajor() >= 3);
-    }
-
-    @Override
-    public String getVersion() {
-        return ("1.2.3");
-    }
-
-    @Override
-    public String getName() {
-        return ("Simple Extension");
+        System.out.println("BlueJ Telemetry extension started");
     }
 
     @Override
     public void terminate() {
-        System.out.println("Simple extension terminates");
+        if (listener != null) {
+            listener.exportNow();
+        }
+        System.out.println("BlueJ Telemetry extension stopped");
+    }
+
+    @Override
+    public boolean isCompatible() {
+        return getExtensionsAPIVersionMajor() >= 3;
+    }
+
+    @Override
+    public String getVersion() {
+        return "1.0";
+    }
+
+    @Override
+    public String getName() {
+        return "BlueJ Telemetry";
     }
 
     @Override
     public String getDescription() {
-        return ("A simple extension");
+        return "Records project, class, editing, compile and run activity and exports it as JSON (and PDF).";
     }
-
 }

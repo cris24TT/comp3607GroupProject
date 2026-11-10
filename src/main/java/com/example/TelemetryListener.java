@@ -28,6 +28,9 @@ public class TelemetryListener implements ExtensionEventListener {
     private static final DateTimeFormatter FILE_TIME = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
             .withZone(ZoneId.systemDefault());
 
+    /** Set to true to print every event and record to BlueJ's debug log. */
+    private static final boolean DEBUG = false;
+
     private final List<TelemetryRecord> records = new ArrayList<>();
     private final EventAdapterFactory factory = new EventAdapterFactory();
     // Strategy list: add new PdfExporter() here and a .pdf is written next to the .json
@@ -41,9 +44,15 @@ public class TelemetryListener implements ExtensionEventListener {
     private Path outputDir = Path.of(System.getProperty("user.home"), "bluej-telemetry"); // fallback
     private boolean projectReady = false; // ignore class events until the project is baselined
 
+    private static void debug(String message) {
+        if (DEBUG) {
+            System.out.println(message);
+        }
+    }
+
     @Override
     public synchronized void eventOccurred(ExtensionEvent event) {
-        System.out.println("RECEIVED EVENT: " + event.getClass().getName());
+        debug("RECEIVED EVENT: " + event.getClass().getName());
 
         if (event instanceof PackageEvent pe && pe.getEventType() == PackageEvent.EventType.PACKAGE_OPENED) {
             rememberProject(pe.getPackage());
@@ -51,7 +60,7 @@ public class TelemetryListener implements ExtensionEventListener {
 
         EventAdapter adapter = factory.adapterFor(event);
         if (adapter == null) {
-            System.out.println("Unsupported event: " + event.getClass().getName());
+            debug("Unsupported event: " + event.getClass().getName());
             return;
         }
 
@@ -183,7 +192,7 @@ public class TelemetryListener implements ExtensionEventListener {
     private void addAll(List<TelemetryRecord> found) {
         for (TelemetryRecord r : found) {
             records.add(r);
-            System.out.println("RECORD: " + r.getCategory() + " " + r.getEventType() + " " + r.getAttributes());
+            debug("RECORD: " + r.getCategory() + " " + r.getEventType() + " " + r.getAttributes());
         }
     }
 
