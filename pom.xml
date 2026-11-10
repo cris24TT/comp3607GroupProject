@@ -24,6 +24,14 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- JavaFX (BlueJ's menus): BlueJ ships it, so NOT packed into the jar -->
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-controls</artifactId>
+            <version>21.0.5</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- Gson: packed into the jar by the shade plugin -->
         <dependency>
             <groupId>com.google.code.gson</groupId>
@@ -126,6 +134,7 @@
                                 <!-- BlueJ integration layer: needs a running BlueJ, verified manually -->
                                 <exclude>com/example/SimpleExtension.class</exclude>
                                 <exclude>com/example/TelemetryListener.class</exclude>
+                                <exclude>com/example/TelemetryMenu.class</exclude>
                             </excludes>
                         </configuration>
                     </execution>

@@ -15,52 +15,46 @@ import bluej.extensions2.event.PackageEvent;
 /*
  * This is the starting point of a BlueJ Extension
  */
-public class SimpleExtension extends Extension
-{
+public class SimpleExtension extends Extension {
     /*
      * When this method is called, the extension may start its work.
      */
-   @Override
+    @Override
     public void startup(BlueJ bluej) {
 
-    System.out.println("EXTENSION STARTED");
+        System.out.println("EXTENSION STARTED");
 
-TelemetryListener listener = new TelemetryListener();
+        TelemetryListener listener = new TelemetryListener();
 
-bluej.addExtensionEventListener(listener);
+        bluej.addExtensionEventListener(listener);
+        bluej.setMenuGenerator(new TelemetryMenu(listener));
 
-    System.out.println("EVENT LISTENER REGISTERED");
-    }
-
-    @Override 
-    public boolean isCompatible()
-    { 
-        return (getExtensionsAPIVersionMajor() >= 3); 
-    }
-    
-    @Override
-    public String getVersion ()
-    { 
-        return ("1.2.3"); 
+        System.out.println("EVENT LISTENER REGISTERED");
     }
 
     @Override
-    public String getName ()
-    { 
-        return ("Simple Extension"); 
+    public boolean isCompatible() {
+        return (getExtensionsAPIVersionMajor() >= 3);
     }
 
     @Override
-    public void terminate()
-    {
-        System.out.println ("Simple extension terminates");
+    public String getVersion() {
+        return ("1.2.3");
     }
 
-    @Override   
-    public String getDescription ()
-    {
+    @Override
+    public String getName() {
+        return ("Simple Extension");
+    }
+
+    @Override
+    public void terminate() {
+        System.out.println("Simple extension terminates");
+    }
+
+    @Override
+    public String getDescription() {
         return ("A simple extension");
     }
 
 }
-
