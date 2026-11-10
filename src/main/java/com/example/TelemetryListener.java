@@ -1,7 +1,7 @@
 package com.example;
 
 import java.io.IOException;
-import java.io.Writer;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -28,8 +28,9 @@ public class TelemetryListener implements ExtensionEventListener {
 
     private final List<TelemetryRecord> records = new ArrayList<>();
     private final EventAdapterFactory factory = new EventAdapterFactory();
-    private final TelemetryExporter exporter = new JsonExporter();
+    private final List<TelemetryExporter> exporters = List.of(new JsonExporter());
     private final ClassTracker classTracker = new ClassTracker();
+     private boolean projectReady = false; // ignore class events until the project is baselined
 
     private Instant sessionStart = Instant.now();
     private String projectName = "unknown";
@@ -61,6 +62,7 @@ public class TelemetryListener implements ExtensionEventListener {
         }
 
         if (event instanceof PackageEvent pe && pe.getEventType() == PackageEvent.EventType.PACKAGE_CLOSING) {
+            projectReady = false;
             exportNow();
         }
     }
@@ -70,25 +72,37 @@ public class TelemetryListener implements ExtensionEventListener {
             projectName = pkg.getProject().getName();
             outputDir = pkg.getProject().getDir().toPath().resolve("telemetry");
             classTracker.baseline(classNames(pkg));
+                        projectReady = true;
         } catch (Exception e) {
             System.out.println("Could not read project info: " + e.getMessage());
         }
     }
 
     /** Adds CLASS_CREATED / CLASS_DELETED / METHOD_ADDED / METHOD_REMOVED records. */
+       /** Adds CLASS_CREATED / CLASS_DELETED / METHOD_ADDED / METHOD_REMOVED records. */
     private void trackLifecycle(ClassEvent ce) {
+        if (!projectReady) {
+            return;
+        }
         try {
-            List<TelemetryRecord> found = new ArrayList<>(classTracker.updateClasses(classNames(ce.getPackage())));
-            if (ce.getEventType() == ClassEvent.EventType.STATE_CHANGED && ce.isClassCompiled()) {
-                BClass bc = ce.getBClass();
-                found.addAll(classTracker.updateMethods(bc.getName(), methodSignatures(bc)));
-            }
-            for (TelemetryRecord r : found) {
-                records.add(r);
-                System.out.println("RECORD: " + r.getCategory() + " " + r.getEventType() + " " + r.getAttributes());
-            }
+            addAll(classTracker.updateClasses(classNames(ce.getPackage())));
         } catch (Exception e) {
-            System.out.println("Lifecycle tracking failed: " + e);
+            System.out.println("Class tracking failed: " + e);
+        }
+        if (ce.getEventType() == ClassEvent.EventType.STATE_CHANGED && ce.isClassCompiled()) {
+            try {
+                BClass bc = ce.getBClass();
+                addAll(classTracker.updateMethods(bc.getName(), methodSignatures(bc)));
+            } catch (Exception e) {
+                System.out.println("Method tracking failed: " + e);
+            }
+        }
+    }
+
+    private void addAll(List<TelemetryRecord> found) {
+        for (TelemetryRecord r : found) {
+            records.add(r);
+            System.out.println("RECORD: " + r.getCategory() + " " + r.getEventType() + " " + r.getAttributes());
         }
     }
 
@@ -116,6 +130,7 @@ public class TelemetryListener implements ExtensionEventListener {
      * Writes all records collected so far to a JSON file, then starts a fresh
      * session.
      */
+        /** Writes the session with every exporter, then starts a fresh session. */
     public synchronized void exportNow() {
         if (records.isEmpty()) {
             return;
@@ -123,22 +138,25 @@ public class TelemetryListener implements ExtensionEventListener {
         Instant end = Instant.now();
         TelemetryAggregator stats = new TelemetryAggregator(records);
         SessionMetadata meta = new SessionMetadata(projectName, sessionStart, end, stats.compileAttempts());
+        String baseName = "telemetry-" + FILE_TIME.format(end);
 
-        Path file = outputDir.resolve("telemetry-" + FILE_TIME.format(end) + ".json");
-        try {
-            Files.createDirectories(outputDir);
-            try (Writer out = Files.newBufferedWriter(file)) {
-                exporter.export(meta, stats, records, out);
+        boolean anyWritten = false;
+        for (TelemetryExporter exporter : exporters) {
+            Path file = outputDir.resolve(baseName + "." + exporter.fileExtension());
+            try {
+                Files.createDirectories(outputDir);
+                try (OutputStream out = Files.newOutputStream(file)) {
+                    exporter.export(meta, stats, records, out);
+                }
+                System.out.println("TELEMETRY EXPORTED: " + file);
+                anyWritten = true;
+            } catch (IOException e) {
+                System.out.println("TELEMETRY EXPORT FAILED (" + exporter.fileExtension() + "): " + e.getMessage());
             }
-            System.out.println("TELEMETRY EXPORTED: " + file);
+        }
+        if (anyWritten) {
             records.clear();
             sessionStart = Instant.now();
-        } catch (IOException e) {
-            System.out.println("TELEMETRY EXPORT FAILED: " + e.getMessage());
         }
-    }
-
-    public synchronized List<TelemetryRecord> getRecords() {
-        return new ArrayList<>(records);
     }
 }

@@ -3,8 +3,8 @@ package com.example;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
-
-import java.io.StringWriter;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 
@@ -36,11 +36,11 @@ class JsonExporterTest {
                 Instant.parse("2026-11-09T10:00:00Z"),
                 Instant.parse("2026-11-09T10:30:00Z"),
                 stats.compileAttempts());
-
-        StringWriter out = new StringWriter();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
         new JsonExporter().export(meta, stats, records, out);
 
-        JsonObject json = JsonParser.parseString(out.toString()).getAsJsonObject();
+        JsonObject json = JsonParser.parseString(out.toString(StandardCharsets.UTF_8)).getAsJsonObject();
+
         JsonObject metaJson = json.getAsJsonObject("sessionMetadata");
 
         assertEquals(SessionMetadata.STUDENT_ID_PLACEHOLDER, metaJson.get("studentId").getAsString());
@@ -50,5 +50,9 @@ class JsonExporterTest {
         // Instant must be written as a readable ISO string
         assertEquals("2026-11-09T10:05:00Z",
                 json.getAsJsonArray("events").get(0).getAsJsonObject().get("timestamp").getAsString());
+    }
+        @Test
+    void jsonExporterUsesJsonExtension() {
+        assertEquals("json", new JsonExporter().fileExtension());
     }
 }
