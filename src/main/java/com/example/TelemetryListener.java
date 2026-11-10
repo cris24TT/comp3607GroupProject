@@ -12,7 +12,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.StringJoiner;
-
+import bluej.extensions2.editor.JavaEditor;
+import bluej.extensions2.event.CompileEvent;
 import bluej.extensions2.BClass;
 import bluej.extensions2.BMethod;
 import bluej.extensions2.BPackage;
@@ -30,7 +31,9 @@ public class TelemetryListener implements ExtensionEventListener {
     private final EventAdapterFactory factory = new EventAdapterFactory();
     private final List<TelemetryExporter> exporters = List.of(new JsonExporter());
     private final ClassTracker classTracker = new ClassTracker();
-     private boolean projectReady = false; // ignore class events until the project is baselined
+    private boolean projectReady = false; // ignore class events until the project is baselined
+    private final EditTracker editTracker = new EditTracker();
+    private final Set<String> watchedEditors = new HashSet<>();
 
     private Instant sessionStart = Instant.now();
     private String projectName = "unknown";
@@ -51,6 +54,9 @@ public class TelemetryListener implements ExtensionEventListener {
         }
 
         TelemetryRecord record = adapter.adapt(event);
+        if (record != null && CompileEventAdapter.COMPILE_START.equals(record.getEventType())) {
+            addAll(editTracker.flush()); // close the typing burst before the compile
+        }
         if (record != null) {
             records.add(record);
             System.out.println(
@@ -72,20 +78,26 @@ public class TelemetryListener implements ExtensionEventListener {
             projectName = pkg.getProject().getName();
             outputDir = pkg.getProject().getDir().toPath().resolve("telemetry");
             classTracker.baseline(classNames(pkg));
-                        projectReady = true;
+            watchEditors(pkg);
+            projectReady = true;
         } catch (Exception e) {
             System.out.println("Could not read project info: " + e.getMessage());
         }
     }
 
-    /** Adds CLASS_CREATED / CLASS_DELETED / METHOD_ADDED / METHOD_REMOVED records. */
-       /** Adds CLASS_CREATED / CLASS_DELETED / METHOD_ADDED / METHOD_REMOVED records. */
+    /**
+     * Adds CLASS_CREATED / CLASS_DELETED / METHOD_ADDED / METHOD_REMOVED records.
+     */
+    /**
+     * Adds CLASS_CREATED / CLASS_DELETED / METHOD_ADDED / METHOD_REMOVED records.
+     */
     private void trackLifecycle(ClassEvent ce) {
         if (!projectReady) {
             return;
         }
         try {
             addAll(classTracker.updateClasses(classNames(ce.getPackage())));
+            watchEditors(ce.getPackage()); // new classes get a listener too
         } catch (Exception e) {
             System.out.println("Class tracking failed: " + e);
         }
@@ -130,8 +142,9 @@ public class TelemetryListener implements ExtensionEventListener {
      * Writes all records collected so far to a JSON file, then starts a fresh
      * session.
      */
-        /** Writes the session with every exporter, then starts a fresh session. */
+    /** Writes the session with every exporter, then starts a fresh session. */
     public synchronized void exportNow() {
+        addAll(editTracker.flush());
         if (records.isEmpty()) {
             return;
         }
@@ -158,5 +171,29 @@ public class TelemetryListener implements ExtensionEventListener {
             records.clear();
             sessionStart = Instant.now();
         }
+    }
+
+    /** Attaches a typing listener to every class editor not yet watched. */
+    private void watchEditors(BPackage pkg) throws Exception {
+        for (BClass c : pkg.getClasses()) {
+            String name = c.getName();
+            if (watchedEditors.contains(name)) {
+                continue;
+            }
+            JavaEditor editor = c.getJavaEditor();
+            if (editor == null) {
+                continue; // not a Java class (e.g. Stride)
+            }
+            editor.addDocumentListener((start, replaced, replacement, linesRemoved, linesAdded) -> onTextReplaced(name,
+                    replaced, replacement, linesRemoved, linesAdded));
+            watchedEditors.add(name);
+        }
+    }
+
+    private synchronized void onTextReplaced(String cls, String replaced, String replacement,
+            int linesRemoved, int linesAdded) {
+        int inserted = replacement == null ? 0 : replacement.length();
+        int deleted = replaced == null ? 0 : replaced.length();
+        addAll(editTracker.onEdit(cls, Instant.now(), inserted, deleted, linesAdded, linesRemoved));
     }
 }

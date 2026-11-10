@@ -16,7 +16,8 @@ public class JsonExporter implements TelemetryExporter {
 
     private final Gson gson = new GsonBuilder()
             .setPrettyPrinting()
-            // Gson can't read Instant's private fields on Java 21, so write it as an ISO string
+            // Gson can't read Instant's private fields on Java 21, so write it as an ISO
+            // string
             .registerTypeAdapter(Instant.class,
                     (JsonSerializer<Instant>) (src, type, ctx) -> new JsonPrimitive(src.toString()))
             .create();
@@ -28,7 +29,7 @@ public class JsonExporter implements TelemetryExporter {
 
     @Override
     public void export(SessionMetadata metadata, TelemetryAggregator stats,
-                       List<TelemetryRecord> records, OutputStream out) throws IOException {
+            List<TelemetryRecord> records, OutputStream out) throws IOException {
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("compileAttempts", stats.compileAttempts());
         summary.put("compileSuccessRate", stats.compileSuccessRate());
@@ -41,6 +42,10 @@ public class JsonExporter implements TelemetryExporter {
         summary.put("idleSeconds", stats.idleTime().getSeconds());
         summary.put("idleThresholdSeconds", TelemetryAggregator.DEFAULT_IDLE_THRESHOLD.getSeconds());
         summary.put("creationTimeline", stats.creationTimeline());
+        summary.put("editBursts", stats.editBurstCount());
+        summary.put("totalEdits", stats.totalEdits());
+        summary.put("typingCadenceMs", stats.typingCadenceMs());
+        summary.put("editsPerActiveMinute", stats.editsPerActiveMinute());
 
         Map<String, Object> root = new LinkedHashMap<>();
         root.put("sessionMetadata", metadata);

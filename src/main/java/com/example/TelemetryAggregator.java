@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
  
 public class TelemetryAggregator {
  
@@ -115,10 +116,18 @@ public class TelemetryAggregator {
  
     // ---------- time stats ----------
  
-    private List<Instant> sortedTimestamps() {
+        private List<Instant> sortedTimestamps() {
         return records.stream()
-                .map(TelemetryRecord::getTimestamp)
-                .filter(Objects::nonNull)
+                .flatMap(r -> {
+                    Stream.Builder<Instant> b = Stream.builder();
+                    if (r.getTimestamp() != null) {
+                        b.add(r.getTimestamp());
+                    }
+                    if (r.getAttributes().get("end") instanceof Instant end) {
+                        b.add(end);
+                    }
+                    return b.build();
+                })
                 .sorted()
                 .toList();
     }
@@ -147,5 +156,37 @@ public class TelemetryAggregator {
  
     public Duration activeTime() {
         return sessionSpan().minus(idleTime());
+    }
+        // ---------- typing stats ----------
+
+    private List<TelemetryRecord> editBursts() {
+        return records.stream()
+                .filter(r -> EditTracker.EDIT_BURST.equals(r.getEventType()))
+                .toList();
+    }
+
+    private static long longAttr(TelemetryRecord r, String key) {
+        return r.getAttributes().get(key) instanceof Number n ? n.longValue() : 0L;
+    }
+
+    public long editBurstCount() {
+        return editBursts().size();
+    }
+
+    public long totalEdits() {
+        return editBursts().stream().mapToLong(r -> longAttr(r, "edits")).sum();
+    }
+
+    /** Typing cadence: average milliseconds between consecutive edits while typing. */
+    public double typingCadenceMs() {
+        long gaps = editBursts().stream().mapToLong(r -> longAttr(r, "gapSumMs")).sum();
+        long intervals = editBursts().stream().mapToLong(r -> Math.max(0, longAttr(r, "edits") - 1)).sum();
+        return intervals == 0 ? 0.0 : (double) gaps / intervals;
+    }
+
+    /** Edit frequency: edits per minute of active time. */
+    public double editsPerActiveMinute() {
+        double minutes = activeTime().toMillis() / 60000.0;
+        return minutes == 0 ? 0.0 : totalEdits() / minutes;
     }
 }
