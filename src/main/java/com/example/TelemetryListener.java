@@ -34,7 +34,7 @@ public class TelemetryListener implements ExtensionEventListener {
     private final List<TelemetryRecord> records = new ArrayList<>();
     private final EventAdapterFactory factory = new EventAdapterFactory();
     // Strategy list: add new PdfExporter() here and a .pdf is written next to the .json
-    private final List<TelemetryExporter> exporters = List.of(new JsonExporter());
+    private final List<TelemetryExporter> exporters = List.of(new JsonExporter(), new PdfExporter());
     private final ClassTracker classTracker = new ClassTracker();
     private final EditTracker editTracker = new EditTracker();
     private final Set<String> watchedEditors = new HashSet<>();
