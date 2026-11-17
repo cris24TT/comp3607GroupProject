@@ -8,8 +8,10 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.StringJoiner;
 
@@ -38,6 +40,7 @@ public class TelemetryListener implements ExtensionEventListener {
     private final ClassTracker classTracker = new ClassTracker();
     private final EditTracker editTracker = new EditTracker();
     private final Set<String> watchedEditors = new HashSet<>();
+    private final Map<String, BClass> methodsToCheck = new HashMap<>(); // compiled classes whose methods we still need to read
 
     private Instant sessionStart = Instant.now();
     private String projectName = "unknown";
@@ -53,6 +56,7 @@ public class TelemetryListener implements ExtensionEventListener {
     @Override
     public synchronized void eventOccurred(ExtensionEvent event) {
         debug("RECEIVED EVENT: " + event.getClass().getName());
+        checkMethods(); // classes compiled earlier may be readable now
 
         if (event instanceof PackageEvent pe && pe.getEventType() == PackageEvent.EventType.PACKAGE_OPENED) {
             rememberProject(pe.getPackage());
@@ -80,6 +84,7 @@ public class TelemetryListener implements ExtensionEventListener {
             projectReady = false;
             watchedEditors.clear();
             exportNow();
+            methodsToCheck.clear();
         }
     }
 
@@ -96,6 +101,7 @@ public class TelemetryListener implements ExtensionEventListener {
     }
 
     private List<Path> export(boolean endSession) {
+        checkMethods();
         addAll(editTracker.flush());
         if (records.isEmpty()) {
             return List.of();
@@ -150,7 +156,9 @@ public class TelemetryListener implements ExtensionEventListener {
             return;
         }
         try {
-            addAll(classTracker.updateClasses(classNames(ce.getPackage())));
+            Set<String> names = classNames(ce.getPackage());
+            addAll(classTracker.updateClasses(names));
+            methodsToCheck.keySet().retainAll(names); // forget classes that were deleted
             watchEditors(ce.getPackage()); // new classes get a typing listener too
         } catch (Exception e) {
             System.out.println("Class tracking failed: " + e);
@@ -158,9 +166,25 @@ public class TelemetryListener implements ExtensionEventListener {
         if (ce.getEventType() == ClassEvent.EventType.STATE_CHANGED && ce.isClassCompiled()) {
             try {
                 BClass bc = ce.getBClass();
-                addAll(classTracker.updateMethods(bc.getName(), methodSignatures(bc)));
+                methodsToCheck.put(bc.getName(), bc);
             } catch (Exception e) {
                 System.out.println("Method tracking failed: " + e);
+            }
+            checkMethods();
+        }
+    }
+
+    // Right after a compile, BlueJ may not have loaded the new class yet, so reading its
+    // methods throws ClassNotFoundException. We keep the class in methodsToCheck and try
+    // again on the next event (or at export) until it works.
+    private void checkMethods() {
+        for (String name : new ArrayList<>(methodsToCheck.keySet())) {
+            try {
+                Set<String> methods = methodSignatures(methodsToCheck.get(name));
+                addAll(classTracker.updateMethods(name, methods));
+                methodsToCheck.remove(name);
+            } catch (Exception e) {
+                debug("Methods of " + name + " not readable yet: " + e);
             }
         }
     }
