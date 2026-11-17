@@ -6,6 +6,7 @@ import bluej.extensions2.event.ExtensionEvent;
 import java.time.Clock;
 import java.time.Instant;
 
+// Adapter pattern: turns a BlueJ ClassEvent (class changed, compiled, renamed or removed) into a TelemetryRecord.
 public class ClassEventAdapter implements EventAdapter {
 
     public static final String CATEGORY = "CLASS";
@@ -28,21 +29,25 @@ public class ClassEventAdapter implements EventAdapter {
     public TelemetryRecord adapt(ExtensionEvent event) {
         ClassEvent ce = (ClassEvent) event;
 
-        String type = switch (ce.getEventType()) {
-            case STATE_CHANGED -> ce.isClassCompiled() ? CLASS_COMPILED : CLASS_MODIFIED;
-            case CHANGED_NAME -> CLASS_RENAMED;
-            case REMOVED -> CLASS_REMOVED;
-        };
-
-        return build(type, safeName(ce), ce.getOldName(), ce.hasError());
-    }
-
-    private static String safeName(ClassEvent ce) {
-        try {
-            return ce.getBClass().getName();
-        } catch (Exception e) {
-            return "unknown";
+        String type;
+        if (ce.getEventType() == ClassEvent.EventType.CHANGED_NAME) {
+            type = CLASS_RENAMED;
+        } else if (ce.getEventType() == ClassEvent.EventType.REMOVED) {
+            type = CLASS_REMOVED;
+        } else if (ce.isClassCompiled()) {
+            type = CLASS_COMPILED;
+        } else {
+            type = CLASS_MODIFIED; // the class was edited and needs compiling again
         }
+
+        String className;
+        try {
+            className = ce.getBClass().getName();
+        } catch (Exception e) {
+            className = "unknown"; // e.g. the class was already removed
+        }
+
+        return build(type, className, ce.getOldName(), ce.hasError());
     }
 
     TelemetryRecord build(String type, String className, String oldName, boolean hasError) {

@@ -6,9 +6,10 @@ import bluej.extensions2.event.ExtensionEvent;
 import java.io.File;
 import java.time.Clock;
 import java.time.Instant;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 
+// Adapter pattern: turns a BlueJ CompileEvent into a TelemetryRecord.
 public class CompileEventAdapter implements EventAdapter {
 
     public static final String CATEGORY = "COMPILE";
@@ -21,37 +22,49 @@ public class CompileEventAdapter implements EventAdapter {
     private final Clock clock;
 
     public CompileEventAdapter() {
-        this(Clock.systemDefaultZone()); 
+        this(Clock.systemDefaultZone());
     }
 
+    // The tests pass in a fixed clock so the timestamps are always the same.
     public CompileEventAdapter(Clock clock) {
-        this.clock = clock; 
+        this.clock = clock;
     }
 
     @Override
     public TelemetryRecord adapt(ExtensionEvent event) {
         CompileEvent ce = (CompileEvent) event;
 
+        // BlueJ also compiles in the background while you type. Only count compiles the student started.
         if (!ce.isUserGeneratedCompilation()) {
-            return null; 
+            return null;
         }
 
-        File[] files = ce.getFiles();
-        List<String> fileNames = (files == null)
-                ? List.of()
-                : Arrays.stream(files).map(File::getName).toList();
+        List<String> fileNames = new ArrayList<>();
+        if (ce.getFiles() != null) {
+            for (File f : ce.getFiles()) {
+                fileNames.add(f.getName());
+            }
+        }
 
-        String type = switch (ce.getEventType()) {
-            case COMPILE_START_EVENT -> COMPILE_START;
-            case COMPILE_ERROR_EVENT -> COMPILE_ERROR;
-            case COMPILE_WARNING_EVENT -> COMPILE_WARNING;
-            case COMPILE_DONE_EVENT -> COMPILE_SUCCESS;
-            case COMPILE_FAILED_EVENT -> COMPILE_FAILED;
-        };
-
-        return build(type, fileNames, ce.getErrorLineNumber(), ce.getErrorMessage());
+        return build(typeOf(ce.getEventType()), fileNames, ce.getErrorLineNumber(), ce.getErrorMessage());
     }
 
+    private static String typeOf(CompileEvent.EventType type) {
+        switch (type) {
+            case COMPILE_START_EVENT:
+                return COMPILE_START;
+            case COMPILE_ERROR_EVENT:
+                return COMPILE_ERROR;
+            case COMPILE_WARNING_EVENT:
+                return COMPILE_WARNING;
+            case COMPILE_DONE_EVENT:
+                return COMPILE_SUCCESS;
+            default:
+                return COMPILE_FAILED;
+        }
+    }
+
+    // Builds the record. Separate from adapt() so the tests can call it without BlueJ.
     TelemetryRecord build(String type, List<String> fileNames, int line, String message) {
         TelemetryRecord r = new TelemetryRecord();
         r.setTimeStamp(Instant.now(clock));
@@ -67,11 +80,12 @@ public class CompileEventAdapter implements EventAdapter {
         return r;
     }
 
+    // BlueJ gives no error codes, so we use the first line of the message, e.g. "';' expected".
     static String errorType(String message) {
         if (message == null || message.isBlank()) {
             return "unknown";
         }
-        return message.split("\\R", 2)[0].trim();
-    }}
-
-    
+        String firstLine = message.split("\\R")[0];
+        return firstLine.trim();
+    }
+}

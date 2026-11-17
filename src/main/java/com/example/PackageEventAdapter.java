@@ -10,6 +10,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 
+// Adapter pattern: turns a BlueJ PackageEvent (project opened or closing) into a TelemetryRecord.
 public class PackageEventAdapter implements EventAdapter {
 
     public static final String CATEGORY = "PROJECT";
@@ -17,7 +18,8 @@ public class PackageEventAdapter implements EventAdapter {
     public static final String PROJECT_OPENED = "PROJECT_OPENED";
     public static final String PROJECT_CLOSED = "PROJECT_CLOSED";
 
-    /** A project whose folder is younger than this when opened is treated as newly created. */
+    // BlueJ has no "project created" event. If the project folder is less than
+    // 2 minutes old when it opens, we count it as newly created.
     static final Duration NEW_PROJECT_WINDOW = Duration.ofMinutes(2);
 
     private final Clock clock;
@@ -40,23 +42,27 @@ public class PackageEventAdapter implements EventAdapter {
         Integer classCount = null;
         try {
             projectName = pkg.getProject().getName();
-            folderCreated = Files.readAttributes(pkg.getProject().getDir().toPath(), BasicFileAttributes.class)
-                    .creationTime().toInstant();
+            BasicFileAttributes folder = Files.readAttributes(
+                    pkg.getProject().getDir().toPath(), BasicFileAttributes.class);
+            folderCreated = folder.creationTime().toInstant();
             classCount = pkg.getClasses().length;
         } catch (Exception e) {
-            // project may already be closing; keep what we have
+            // The project may already be closing. Keep whatever we managed to read.
         }
 
-        String type = switch (pe.getEventType()) {
-            case PACKAGE_OPENED -> openedType(folderCreated, Instant.now(clock));
-            case PACKAGE_CLOSING -> PROJECT_CLOSED;
-        };
+        String type = PROJECT_CLOSED;
+        if (pe.getEventType() == PackageEvent.EventType.PACKAGE_OPENED) {
+            type = openedType(folderCreated, Instant.now(clock));
+        }
         return build(type, projectName, classCount);
     }
 
-    /** PROJECT_CREATED if the folder was created moments ago, otherwise PROJECT_OPENED. */
     static String openedType(Instant folderCreated, Instant now) {
-        if (folderCreated != null && Duration.between(folderCreated, now).compareTo(NEW_PROJECT_WINDOW) <= 0) {
+        if (folderCreated == null) {
+            return PROJECT_OPENED;
+        }
+        Duration age = Duration.between(folderCreated, now);
+        if (age.compareTo(NEW_PROJECT_WINDOW) <= 0) {
             return PROJECT_CREATED;
         }
         return PROJECT_OPENED;

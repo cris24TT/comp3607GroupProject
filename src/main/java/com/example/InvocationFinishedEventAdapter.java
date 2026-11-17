@@ -5,9 +5,11 @@ import bluej.extensions2.event.InvocationFinishedEvent;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+// Adapter pattern: turns a BlueJ InvocationFinishedEvent (a method or constructor run) into a TelemetryRecord.
 public class InvocationFinishedEventAdapter implements EventAdapter {
 
     public static final String CATEGORY = "INVOCATION";
@@ -31,29 +33,36 @@ public class InvocationFinishedEventAdapter implements EventAdapter {
     @Override
     public TelemetryRecord adapt(ExtensionEvent event) {
         InvocationFinishedEvent ie = (InvocationFinishedEvent) event;
+        String type = typeOf(ie.getEventType());
 
-        String type = switch (ie.getEventType()) {
-            case NORMAL_EXIT -> RUN_NORMAL;
-            case EXCEPTION_EXIT -> RUN_EXCEPTION;
-            case TERMINATED_EXIT -> RUN_TERMINATED;
-            case UNKNOWN_EXIT -> RUN_UNKNOWN;
-        };
+        List<String> params = new ArrayList<>();
+        if (ie.getParameters() != null) {
+            params = Arrays.asList(ie.getParameters());
+        }
 
-        String[] params = ie.getParameters();
-        List<String> paramList = (params == null) ? List.of() : Arrays.asList(params);
+        Object result = null;
+        if (type.equals(RUN_NORMAL)) {
+            try {
+                result = ie.getResult();
+            } catch (RuntimeException e) {
+                // BlueJ throws a NullPointerException here when the method is void
+                result = null;
+            }
+        }
 
-        Object result = type.equals(RUN_NORMAL) ? safeResult(ie) : null;
-
-        return build(type, ie.getClassName(), ie.getMethodName(),
-                     ie.getObjectName(), paramList, result);
+        return build(type, ie.getClassName(), ie.getMethodName(), ie.getObjectName(), params, result);
     }
 
-    // BlueJ's getResult() throws a NullPointerException for void methods
-    private static Object safeResult(InvocationFinishedEvent ie) {
-        try {
-            return ie.getResult();
-        } catch (RuntimeException e) {
-            return null;
+    private static String typeOf(InvocationFinishedEvent.EventType type) {
+        switch (type) {
+            case NORMAL_EXIT:
+                return RUN_NORMAL;
+            case EXCEPTION_EXIT:
+                return RUN_EXCEPTION;
+            case TERMINATED_EXIT:
+                return RUN_TERMINATED;
+            default:
+                return RUN_UNKNOWN;
         }
     }
 
@@ -64,9 +73,12 @@ public class InvocationFinishedEventAdapter implements EventAdapter {
         r.setCategory(CATEGORY);
         r.setEventType(type);
 
-        // Constructors are called on the class (no object yet); methods on an object.
-        // BlueJ gives no method name when a method throws or is terminated.
-        String kind = (methodName != null || objectName != null) ? "method" : "constructor";
+        // A constructor runs on the class (there is no object yet). A method runs on an object.
+        // When a method throws, BlueJ gives no method name, but the object name is still there.
+        String kind = "constructor";
+        if (methodName != null || objectName != null) {
+            kind = "method";
+        }
 
         r.addAttribute("className", className);
         r.addAttribute("invocationKind", kind);
@@ -75,20 +87,22 @@ public class InvocationFinishedEventAdapter implements EventAdapter {
         r.addAttribute("parameters", params);
         r.addAttribute("exception", type.equals(RUN_EXCEPTION));
 
+        // BlueJ doesn't give us the console output, so the return value is our "output summary".
         if (type.equals(RUN_NORMAL) && kind.equals("method")) {
             r.addAttribute("resultSummary", summarize(result));
         }
         return r;
     }
 
+    // Turns the return value into short text. Long values are cut to 100 characters.
     static String summarize(Object result) {
         if (result == null) {
             return "void";
         }
-        String s = String.valueOf(result);
-        if (s.length() > MAX_RESULT_LENGTH) {
-            return s.substring(0, MAX_RESULT_LENGTH) + "...";
+        String text = String.valueOf(result);
+        if (text.length() > MAX_RESULT_LENGTH) {
+            return text.substring(0, MAX_RESULT_LENGTH) + "...";
         }
-        return s;
+        return text;
     }
 }

@@ -1,5 +1,15 @@
 package com.example;
 
+import bluej.extensions2.BClass;
+import bluej.extensions2.BMethod;
+import bluej.extensions2.BPackage;
+import bluej.extensions2.editor.JavaEditor;
+import bluej.extensions2.event.ClassEvent;
+import bluej.extensions2.event.ExtensionEvent;
+import bluej.extensions2.event.ExtensionEventListener;
+import bluej.extensions2.event.PackageEvent;
+
+import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Files;
@@ -13,107 +23,95 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.StringJoiner;
 
-import bluej.extensions2.BClass;
-import bluej.extensions2.BMethod;
-import bluej.extensions2.BPackage;
-import bluej.extensions2.editor.JavaEditor;
-import bluej.extensions2.event.ClassEvent;
-import bluej.extensions2.event.ExtensionEvent;
-import bluej.extensions2.event.ExtensionEventListener;
-import bluej.extensions2.event.PackageEvent;
-
-/** Bridge between BlueJ and the telemetry model: turns BlueJ events into records and exports them. */
+// Receives every event from BlueJ, turns it into records and exports them.
+// This is the only class (with SimpleExtension and TelemetryMenu) that needs BlueJ running.
 public class TelemetryListener implements ExtensionEventListener {
 
-    private static final DateTimeFormatter FILE_TIME = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
-            .withZone(ZoneId.systemDefault());
+    private static final DateTimeFormatter FILE_TIME =
+            DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").withZone(ZoneId.systemDefault());
 
-    /** Set to true to print every event and record to BlueJ's debug log. */
-    private static final boolean DEBUG = false;
-
-    private final List<TelemetryRecord> records = new ArrayList<>();
     private final EventAdapterFactory factory = new EventAdapterFactory();
-    // Strategy list: add new PdfExporter() here and a .pdf is written next to the .json
-    private final List<TelemetryExporter> exporters = List.of(new JsonExporter(), new PdfExporter());
     private final ClassTracker classTracker = new ClassTracker();
     private final EditTracker editTracker = new EditTracker();
-    private final Set<String> watchedEditors = new HashSet<>();
-    private final Map<String, BClass> methodsToCheck = new HashMap<>(); // compiled classes whose methods we still need to read
+
+    // Strategy pattern: every exporter in this list writes its own file (JSON and PDF).
+    private final List<TelemetryExporter> exporters = List.of(new JsonExporter(), new PdfExporter());
+
+    private List<TelemetryRecord> records = new ArrayList<>();
+    private Set<String> watchedEditors = new HashSet<>();        // classes we already listen to for typing
+    private Map<String, BClass> methodsToCheck = new HashMap<>(); // compiled classes whose methods we still need to read
 
     private Instant sessionStart = Instant.now();
     private String projectName = "unknown";
-    private Path outputDir = Path.of(System.getProperty("user.home"), "bluej-telemetry"); // fallback
-    private boolean projectReady = false; // ignore class events until the project is baselined
-
-    private static void debug(String message) {
-        if (DEBUG) {
-            System.out.println(message);
-        }
-    }
+    private Path outputDir = Path.of(System.getProperty("user.home"), "bluej-telemetry"); // used until a project opens
+    private boolean projectReady = false; // class events are ignored until the project is open
 
     @Override
     public synchronized void eventOccurred(ExtensionEvent event) {
-        debug("RECEIVED EVENT: " + event.getClass().getName());
         checkMethods(); // classes compiled earlier may be readable now
 
-        if (event instanceof PackageEvent pe && pe.getEventType() == PackageEvent.EventType.PACKAGE_OPENED) {
-            rememberProject(pe.getPackage());
+        if (isPackageEvent(event, PackageEvent.EventType.PACKAGE_OPENED)) {
+            rememberProject(((PackageEvent) event).getPackage());
         }
 
+        // Factory pattern: the factory picks the adapter for this kind of event
         EventAdapter adapter = factory.adapterFor(event);
         if (adapter == null) {
-            debug("Unsupported event: " + event.getClass().getName());
-            return;
+            return; // we don't record this kind of event
         }
 
         TelemetryRecord record = adapter.adapt(event);
-        if (record != null && CompileEventAdapter.COMPILE_START.equals(record.getEventType())) {
-            addAll(editTracker.flush()); // close the typing burst before the compile
-        }
         if (record != null) {
-            addAll(List.of(record));
+            if (record.getEventType().equals(CompileEventAdapter.COMPILE_START)) {
+                records.addAll(editTracker.flush()); // finish the typing burst before the compile
+            }
+            records.add(record);
         }
 
-        if (event instanceof ClassEvent ce) {
-            trackLifecycle(ce);
+        if (event instanceof ClassEvent) {
+            trackClassesAndMethods((ClassEvent) event);
         }
 
-        if (event instanceof PackageEvent pe && pe.getEventType() == PackageEvent.EventType.PACKAGE_CLOSING) {
+        if (isPackageEvent(event, PackageEvent.EventType.PACKAGE_CLOSING)) {
             projectReady = false;
-            watchedEditors.clear();
             exportNow();
+            watchedEditors.clear();
             methodsToCheck.clear();
         }
     }
 
-    // ---------- export ----------
+    private static boolean isPackageEvent(ExtensionEvent event, PackageEvent.EventType type) {
+        return event instanceof PackageEvent && ((PackageEvent) event).getEventType() == type;
+    }
 
-    /** End of session: writes all files, then starts a fresh session. */
+    // Export
+
+    // When the project closes: write the files, then start a new session.
     public synchronized List<Path> exportNow() {
         return export(true);
     }
 
-    /** Manual export: writes all files but keeps the session going. */
+    // Tools > Export telemetry now: write the files but keep recording.
     public synchronized List<Path> exportSnapshot() {
         return export(false);
     }
 
     private List<Path> export(boolean endSession) {
         checkMethods();
-        addAll(editTracker.flush());
+        records.addAll(editTracker.flush());
         if (records.isEmpty()) {
-            return List.of();
+            return new ArrayList<>();
         }
+
         Instant end = Instant.now();
         TelemetryAggregator stats = new TelemetryAggregator(records);
         SessionMetadata meta = new SessionMetadata(projectName, sessionStart, end, stats.compileAttempts());
-        String baseName = "telemetry-" + FILE_TIME.format(end);
+        String fileName = "telemetry-" + FILE_TIME.format(end);
 
         List<Path> written = new ArrayList<>();
         for (TelemetryExporter exporter : exporters) {
-            Path file = outputDir.resolve(baseName + "." + exporter.fileExtension());
+            Path file = outputDir.resolve(fileName + "." + exporter.fileExtension());
             try {
                 Files.createDirectories(outputDir);
                 try (OutputStream out = Files.newOutputStream(file)) {
@@ -125,8 +123,9 @@ public class TelemetryListener implements ExtensionEventListener {
                 System.out.println("TELEMETRY EXPORT FAILED (" + exporter.fileExtension() + "): " + e.getMessage());
             }
         }
+
         if (endSession && !written.isEmpty()) {
-            records.clear();
+            records = new ArrayList<>();
             sessionStart = Instant.now();
         }
         return written;
@@ -136,13 +135,13 @@ public class TelemetryListener implements ExtensionEventListener {
         return new ArrayList<>(records);
     }
 
-    // ---------- project, lifecycle and typing ----------
+    // Project, classes and typing
 
     private void rememberProject(BPackage pkg) {
         try {
             projectName = pkg.getProject().getName();
             outputDir = pkg.getProject().getDir().toPath().resolve("telemetry");
-            classTracker.baseline(baselineNames(pkg));
+            classTracker.baseline(classesAtOpen(pkg));
             watchEditors(pkg);
             projectReady = true;
         } catch (Exception e) {
@@ -150,23 +149,24 @@ public class TelemetryListener implements ExtensionEventListener {
         }
     }
 
-    /** Adds CLASS_CREATED / CLASS_DELETED / METHOD_ADDED / METHOD_REMOVED records. */
-    private void trackLifecycle(ClassEvent ce) {
+    // BlueJ has no "class created" or "method added" event, so ClassTracker compares lists for us.
+    private void trackClassesAndMethods(ClassEvent ce) {
         if (!projectReady) {
             return;
         }
         try {
             Set<String> names = classNames(ce.getPackage());
-            addAll(classTracker.updateClasses(names));
+            records.addAll(classTracker.updateClasses(names));
             methodsToCheck.keySet().retainAll(names); // forget classes that were deleted
-            watchEditors(ce.getPackage()); // new classes get a typing listener too
+            watchEditors(ce.getPackage());            // new classes get a typing listener too
         } catch (Exception e) {
             System.out.println("Class tracking failed: " + e);
         }
+
         if (ce.getEventType() == ClassEvent.EventType.STATE_CHANGED && ce.isClassCompiled()) {
             try {
-                BClass bc = ce.getBClass();
-                methodsToCheck.put(bc.getName(), bc);
+                BClass compiled = ce.getBClass();
+                methodsToCheck.put(compiled.getName(), compiled);
             } catch (Exception e) {
                 System.out.println("Method tracking failed: " + e);
             }
@@ -181,43 +181,36 @@ public class TelemetryListener implements ExtensionEventListener {
         for (String name : new ArrayList<>(methodsToCheck.keySet())) {
             try {
                 Set<String> methods = methodSignatures(methodsToCheck.get(name));
-                addAll(classTracker.updateMethods(name, methods));
+                records.addAll(classTracker.updateMethods(name, methods));
                 methodsToCheck.remove(name);
             } catch (Exception e) {
-                debug("Methods of " + name + " not readable yet: " + e);
+                // not loaded yet, try again next time
             }
         }
     }
 
-    /** Attaches a typing listener to every class editor not yet watched. */
+    // Adds a typing listener to every class editor we aren't listening to yet.
     private void watchEditors(BPackage pkg) throws Exception {
         for (BClass c : pkg.getClasses()) {
             String name = c.getName();
             if (watchedEditors.contains(name)) {
-                continue;
+                continue; // already listening to this one
             }
             JavaEditor editor = c.getJavaEditor();
             if (editor == null) {
                 continue; // not a Java class (e.g. Stride)
             }
             editor.addDocumentListener((start, replaced, replacement, linesRemoved, linesAdded) ->
-                    onTextReplaced(name, replaced, replacement, linesRemoved, linesAdded));
+                    onTyping(name, replaced, replacement, linesRemoved, linesAdded));
             watchedEditors.add(name);
         }
     }
 
-    private synchronized void onTextReplaced(String cls, String replaced, String replacement,
-                                             int linesRemoved, int linesAdded) {
-        int inserted = replacement == null ? 0 : replacement.length();
-        int deleted = replaced == null ? 0 : replaced.length();
-        addAll(editTracker.onEdit(cls, Instant.now(), inserted, deleted, linesAdded, linesRemoved));
-    }
-
-    private void addAll(List<TelemetryRecord> found) {
-        for (TelemetryRecord r : found) {
-            records.add(r);
-            debug("RECORD: " + r.getCategory() + " " + r.getEventType() + " " + r.getAttributes());
-        }
+    private synchronized void onTyping(String className, String replaced, String replacement,
+                                       int linesRemoved, int linesAdded) {
+        int inserted = (replacement == null) ? 0 : replacement.length();
+        int deleted = (replaced == null) ? 0 : replaced.length();
+        records.addAll(editTracker.onEdit(className, Instant.now(), inserted, deleted, linesAdded, linesRemoved));
     }
 
     private static Set<String> classNames(BPackage pkg) throws Exception {
@@ -228,27 +221,34 @@ public class TelemetryListener implements ExtensionEventListener {
         return names;
     }
 
-    /** Classes that exist at open: BlueJ's list plus every .java file in the folder. */
-    private static Set<String> baselineNames(BPackage pkg) throws Exception {
+    // The classes that exist when the project opens: BlueJ's list plus every .java file in the folder.
+    private static Set<String> classesAtOpen(BPackage pkg) throws Exception {
         Set<String> names = classNames(pkg);
-        try (var files = Files.list(pkg.getDir().toPath())) {
-            files.map(p -> p.getFileName().toString())
-                 .filter(n -> n.endsWith(".java"))
-                 .map(n -> n.substring(0, n.length() - ".java".length()))
-                 .forEach(names::add);
+        File[] files = pkg.getDir().listFiles();
+        if (files != null) {
+            for (File f : files) {
+                String fileName = f.getName();
+                if (fileName.endsWith(".java")) {
+                    names.add(fileName.substring(0, fileName.length() - ".java".length()));
+                }
+            }
         }
         return names;
     }
 
+    // e.g. "divide(int, int)"
     private static Set<String> methodSignatures(BClass bc) throws Exception {
-        Set<String> sigs = new HashSet<>();
+        Set<String> signatures = new HashSet<>();
         for (BMethod m : bc.getDeclaredMethods()) {
-            StringJoiner params = new StringJoiner(", ", "(", ")");
+            String params = "";
             for (Class<?> p : m.getParameterTypes()) {
-                params.add(p.getSimpleName());
+                if (!params.isEmpty()) {
+                    params += ", ";
+                }
+                params += p.getSimpleName();
             }
-            sigs.add(m.getName() + params);
+            signatures.add(m.getName() + "(" + params + ")");
         }
-        return sigs;
+        return signatures;
     }
 }
