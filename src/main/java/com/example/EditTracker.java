@@ -5,7 +5,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Groups individual edits into bursts so the JSON stays small. No BlueJ code, so it is unit-testable. */
+// Groups single keystrokes into "edit bursts". Edits in the same class with less than
+// 5 seconds between them go in the same burst. This keeps the JSON file small.
 public class EditTracker {
 
     public static final String CATEGORY = "EDIT";
@@ -14,6 +15,7 @@ public class EditTracker {
 
     private final Duration burstGap;
 
+    // The burst we are currently building (className is null when there is none)
     private String className;
     private Instant start;
     private Instant last;
@@ -22,7 +24,7 @@ public class EditTracker {
     private int charsDeleted;
     private int linesAdded;
     private int linesRemoved;
-    private long gapSumMs;
+    private long gapSumMs; // total time between edits, used for typing cadence
 
     public EditTracker() {
         this(DEFAULT_BURST_GAP);
@@ -32,34 +34,42 @@ public class EditTracker {
         this.burstGap = burstGap;
     }
 
-    /** Records one edit. Returns the previous burst if this edit starts a new one, otherwise an empty list. */
+    // Called for every edit. If this edit starts a new burst, the finished burst is returned.
     public synchronized List<TelemetryRecord> onEdit(String cls, Instant time,
                                                      int inserted, int deleted, int added, int removed) {
-        List<TelemetryRecord> out = new ArrayList<>();
-        if (className != null
-                && (!className.equals(cls) || Duration.between(last, time).compareTo(burstGap) > 0)) {
-            out.addAll(flush());
+        List<TelemetryRecord> finished = new ArrayList<>();
+
+        if (className != null) {
+            boolean otherClass = !className.equals(cls);
+            boolean longPause = Duration.between(last, time).compareTo(burstGap) > 0;
+            if (otherClass || longPause) {
+                finished = flush();
+            }
         }
+
         if (className == null) {
             className = cls;
             start = time;
         } else {
             gapSumMs += Duration.between(last, time).toMillis();
         }
+
         last = time;
         edits++;
         charsInserted += inserted;
         charsDeleted += deleted;
         linesAdded += added;
         linesRemoved += removed;
-        return out;
+        return finished;
     }
 
-    /** Closes the current burst (if any) and returns it as a record. */
+    // Ends the current burst and returns it as a record (or an empty list if there is none).
     public synchronized List<TelemetryRecord> flush() {
+        List<TelemetryRecord> result = new ArrayList<>();
         if (className == null) {
-            return List.of();
+            return result;
         }
+
         TelemetryRecord r = new TelemetryRecord();
         r.setTimeStamp(start);
         r.setCategory(CATEGORY);
@@ -73,7 +83,13 @@ public class EditTracker {
         r.addAttribute("durationMs", Duration.between(start, last).toMillis());
         r.addAttribute("gapSumMs", gapSumMs);
         r.addAttribute("end", last);
+        result.add(r);
 
+        reset();
+        return result;
+    }
+
+    private void reset() {
         className = null;
         start = null;
         last = null;
@@ -83,6 +99,5 @@ public class EditTracker {
         linesAdded = 0;
         linesRemoved = 0;
         gapSumMs = 0;
-        return List.of(r);
     }
 }

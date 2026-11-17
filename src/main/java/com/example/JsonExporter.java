@@ -1,6 +1,9 @@
 package com.example;
 
-import com.google.gson.*;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonPrimitive;
+import com.google.gson.JsonSerializer;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -12,14 +15,17 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+// Writes the session as JSON: sessionMetadata, then summary, then every event.
 public class JsonExporter implements TelemetryExporter {
+
+    // Gson can't turn an Instant into JSON on Java 21 by itself,
+    // so we tell it to write each Instant as text like "2026-11-09T14:00:00Z".
+    private final JsonSerializer<Instant> instantAsText =
+            (time, type, context) -> new JsonPrimitive(time.toString());
 
     private final Gson gson = new GsonBuilder()
             .setPrettyPrinting()
-            // Gson can't read Instant's private fields on Java 21, so write it as an ISO
-            // string
-            .registerTypeAdapter(Instant.class,
-                    (JsonSerializer<Instant>) (src, type, ctx) -> new JsonPrimitive(src.toString()))
+            .registerTypeAdapter(Instant.class, instantAsText)
             .create();
 
     @Override
@@ -29,7 +35,7 @@ public class JsonExporter implements TelemetryExporter {
 
     @Override
     public void export(SessionMetadata metadata, TelemetryAggregator stats,
-            List<TelemetryRecord> records, OutputStream out) throws IOException {
+                       List<TelemetryRecord> records, OutputStream out) throws IOException {
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("compileAttempts", stats.compileAttempts());
         summary.put("compileSuccessRate", stats.compileSuccessRate());
@@ -47,13 +53,13 @@ public class JsonExporter implements TelemetryExporter {
         summary.put("typingCadenceMs", stats.typingCadenceMs());
         summary.put("editsPerActiveMinute", stats.editsPerActiveMinute());
 
-        Map<String, Object> root = new LinkedHashMap<>();
-        root.put("sessionMetadata", metadata);
-        root.put("summary", summary);
-        root.put("events", records);
+        Map<String, Object> json = new LinkedHashMap<>();
+        json.put("sessionMetadata", metadata);
+        json.put("summary", summary);
+        json.put("events", records);
 
         Writer writer = new OutputStreamWriter(out, StandardCharsets.UTF_8);
-        gson.toJson(root, writer);
-        writer.flush(); // flush, but don't close: the caller owns the stream
+        gson.toJson(json, writer);
+        writer.flush(); // flush but don't close: TelemetryListener closes the stream
     }
 }

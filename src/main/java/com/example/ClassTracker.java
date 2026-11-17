@@ -2,9 +2,16 @@ package com.example;
 
 import java.time.Clock;
 import java.time.Instant;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 
-/** Detects created/deleted classes and added/removed methods by comparing snapshots. No BlueJ code. */
+// BlueJ has no "class created" or "method added" event, so we keep the last list of
+// classes (and methods) we saw and compare it with the new one each time.
 public class ClassTracker {
 
     public static final String CATEGORY = "LIFECYCLE";
@@ -14,9 +21,9 @@ public class ClassTracker {
     public static final String METHOD_REMOVED = "METHOD_REMOVED";
 
     private final Clock clock;
-    private final Set<String> knownClasses = new HashSet<>();
-    private final Set<String> createdThisSession = new HashSet<>();
-    private final Map<String, Set<String>> knownMethods = new HashMap<>();
+    private Set<String> knownClasses = new HashSet<>();
+    private Set<String> newClasses = new HashSet<>();            // created during this session
+    private Map<String, Set<String>> knownMethods = new HashMap<>(); // class name -> its methods
 
     public ClassTracker() {
         this(Clock.systemDefaultZone());
@@ -26,54 +33,60 @@ public class ClassTracker {
         this.clock = clock;
     }
 
-    /** Classes that already exist when the project opens: remember them, report nothing. */
+    // Classes that are already there when the project opens. We don't report these as new.
     public void baseline(Set<String> classes) {
-        knownClasses.clear();
-        knownClasses.addAll(classes);
+        knownClasses = new HashSet<>(classes);
     }
 
     public List<TelemetryRecord> updateClasses(Set<String> current) {
-        List<TelemetryRecord> out = new ArrayList<>();
-        for (String c : new TreeSet<>(current)) {
-            if (!knownClasses.contains(c)) {
-                out.add(record(CLASS_CREATED, c, null));
-                createdThisSession.add(c);
+        List<TelemetryRecord> found = new ArrayList<>();
+
+        // TreeSet keeps the names in alphabetical order so the output is always the same
+        for (String name : new TreeSet<>(current)) {
+            if (!knownClasses.contains(name)) {
+                found.add(makeRecord(CLASS_CREATED, name, null));
+                newClasses.add(name);
             }
         }
-        for (String c : new TreeSet<>(knownClasses)) {
-            if (!current.contains(c)) {
-                out.add(record(CLASS_DELETED, c, null));
-                knownMethods.remove(c);
+        for (String name : new TreeSet<>(knownClasses)) {
+            if (!current.contains(name)) {
+                found.add(makeRecord(CLASS_DELETED, name, null));
+                knownMethods.remove(name);
             }
         }
-        knownClasses.clear();
-        knownClasses.addAll(current);
-        return out;
+
+        knownClasses = new HashSet<>(current);
+        return found;
     }
 
     public List<TelemetryRecord> updateMethods(String className, Set<String> current) {
-        Set<String> previous = knownMethods.put(className, new HashSet<>(current));
-        List<TelemetryRecord> out = new ArrayList<>();
+        List<TelemetryRecord> found = new ArrayList<>();
+        Set<String> previous = knownMethods.get(className);
+        knownMethods.put(className, new HashSet<>(current));
+
         if (previous == null) {
-            if (!createdThisSession.contains(className)) {
-                return out; // first look at a pre-existing class: baseline silently
+            if (!newClasses.contains(className)) {
+                // First time we see an old class: just remember its methods.
+                return found;
             }
-            previous = Set.of(); // new class: every method is new
+            // A class made this session: all its methods are new.
+            previous = new HashSet<>();
         }
-        for (String m : new TreeSet<>(current)) {
-            if (!previous.contains(m)) {
-                out.add(record(METHOD_ADDED, className, m));
-            }
-        }
-        for (String m : new TreeSet<>(previous)) {
-            if (!current.contains(m)) {
-                out.add(record(METHOD_REMOVED, className, m));
+
+        for (String method : new TreeSet<>(current)) {
+            if (!previous.contains(method)) {
+                found.add(makeRecord(METHOD_ADDED, className, method));
             }
         }
-        return out;
+        for (String method : new TreeSet<>(previous)) {
+            if (!current.contains(method)) {
+                found.add(makeRecord(METHOD_REMOVED, className, method));
+            }
+        }
+        return found;
     }
 
-    private TelemetryRecord record(String type, String className, String method) {
+    private TelemetryRecord makeRecord(String type, String className, String method) {
         TelemetryRecord r = new TelemetryRecord();
         r.setTimeStamp(Instant.now(clock));
         r.setCategory(CATEGORY);

@@ -2,14 +2,14 @@ package com.example;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Comparator;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
-/** Pure calculations over a session's records. No BlueJ code; used by the JSON and PDF exporters. */
+// Works out the summary numbers for a session from its list of records.
 public class TelemetryAggregator {
 
     public static final Duration DEFAULT_IDLE_THRESHOLD = Duration.ofMinutes(5);
@@ -22,17 +22,21 @@ public class TelemetryAggregator {
     }
 
     public TelemetryAggregator(List<TelemetryRecord> records, Duration idleThreshold) {
-        this.records = List.copyOf(records);
+        this.records = new ArrayList<>(records);
         this.idleThreshold = idleThreshold;
     }
 
     long count(String eventType) {
-        return records.stream()
-                .filter(r -> eventType.equals(r.getEventType()))
-                .count();
+        long total = 0;
+        for (TelemetryRecord r : records) {
+            if (eventType.equals(r.getEventType())) {
+                total++;
+            }
+        }
+        return total;
     }
 
-    // ---------- compile stats ----------
+    // Compiling
 
     public long compileAttempts() {
         return count(CompileEventAdapter.COMPILE_START);
@@ -46,80 +50,81 @@ public class TelemetryAggregator {
         return count(CompileEventAdapter.COMPILE_FAILED);
     }
 
-    /** Successful compiles divided by compile attempts (0 if there were none). */
-    public double compileSuccessRate() {
-        long attempts = compileAttempts();
-        if (attempts == 0) {
-            return 0.0;
-        }
-        return (double) compileSuccesses() / attempts;
-    }
-
     public long compileErrorCount() {
         return count(CompileEventAdapter.COMPILE_ERROR);
     }
 
-    /** Error ratio: compile errors per compile attempt (0 if there were none). */
-    public double errorsPerCompileAttempt() {
-        long attempts = compileAttempts();
-        if (attempts == 0) {
+    public double compileSuccessRate() {
+        if (compileAttempts() == 0) {
             return 0.0;
         }
-        return (double) compileErrorCount() / attempts;
+        return (double) compileSuccesses() / compileAttempts();
     }
 
-    /** How often each kind of compile error occurred. */
+    public double errorsPerCompileAttempt() {
+        if (compileAttempts() == 0) {
+            return 0.0;
+        }
+        return (double) compileErrorCount() / compileAttempts();
+    }
+
+    // How many times each kind of error happened, e.g. "';' expected" -> 2
     public Map<String, Long> errorFrequency() {
-        return records.stream()
-                .filter(r -> CompileEventAdapter.COMPILE_ERROR.equals(r.getEventType()))
-                .collect(Collectors.groupingBy(
-                        r -> String.valueOf(r.getAttributes().get("errorType")),
-                        Collectors.counting()));
+        Map<String, Long> frequency = new HashMap<>();
+        for (TelemetryRecord r : records) {
+            if (CompileEventAdapter.COMPILE_ERROR.equals(r.getEventType())) {
+                String type = String.valueOf(r.getAttributes().get("errorType"));
+                frequency.put(type, frequency.getOrDefault(type, 0L) + 1);
+            }
+        }
+        return frequency;
     }
 
-    // ---------- run stats ----------
+    // Running
 
     public long runCount() {
-        return records.stream()
-                .filter(r -> InvocationFinishedEventAdapter.CATEGORY.equals(r.getCategory()))
-                .count();
+        long total = 0;
+        for (TelemetryRecord r : records) {
+            if (InvocationFinishedEventAdapter.CATEGORY.equals(r.getCategory())) {
+                total++;
+            }
+        }
+        return total;
     }
 
     public long exceptionCount() {
         return count(InvocationFinishedEventAdapter.RUN_EXCEPTION);
     }
 
-    // ---------- time stats ----------
+    // Time
 
-    /** Every moment something happened: record timestamps plus the end of each typing burst. */
-    private List<Instant> sortedTimestamps() {
-        return records.stream()
-                .flatMap(r -> {
-                    Stream.Builder<Instant> b = Stream.builder();
-                    if (r.getTimestamp() != null) {
-                        b.add(r.getTimestamp());
-                    }
-                    if (r.getAttributes().get("end") instanceof Instant end) {
-                        b.add(end);
-                    }
-                    return b.build();
-                })
-                .sorted()
-                .toList();
+    // All the times something happened, in order. An edit burst counts at its start and its end.
+    private List<Instant> activityTimes() {
+        List<Instant> times = new ArrayList<>();
+        for (TelemetryRecord r : records) {
+            if (r.getTimestamp() != null) {
+                times.add(r.getTimestamp());
+            }
+            if (r.getAttributes().get("end") instanceof Instant end) {
+                times.add(end);
+            }
+        }
+        Collections.sort(times);
+        return times;
     }
 
-    /** Time from the first event to the last event. */
+    // Time from the first event to the last one.
     public Duration sessionSpan() {
-        List<Instant> times = sortedTimestamps();
+        List<Instant> times = activityTimes();
         if (times.size() < 2) {
             return Duration.ZERO;
         }
         return Duration.between(times.get(0), times.get(times.size() - 1));
     }
 
-    /** Sum of all gaps between events that are longer than the idle threshold. */
+    // Any gap between events longer than the threshold counts as idle.
     public Duration idleTime() {
-        List<Instant> times = sortedTimestamps();
+        List<Instant> times = activityTimes();
         Duration idle = Duration.ZERO;
         for (int i = 1; i < times.size(); i++) {
             Duration gap = Duration.between(times.get(i - 1), times.get(i));
@@ -134,16 +139,24 @@ public class TelemetryAggregator {
         return sessionSpan().minus(idleTime());
     }
 
-    // ---------- typing stats ----------
+    // Typing
 
     private List<TelemetryRecord> editBursts() {
-        return records.stream()
-                .filter(r -> EditTracker.EDIT_BURST.equals(r.getEventType()))
-                .toList();
+        List<TelemetryRecord> bursts = new ArrayList<>();
+        for (TelemetryRecord r : records) {
+            if (EditTracker.EDIT_BURST.equals(r.getEventType())) {
+                bursts.add(r);
+            }
+        }
+        return bursts;
     }
 
-    private static long longAttr(TelemetryRecord r, String key) {
-        return r.getAttributes().get(key) instanceof Number n ? n.longValue() : 0L;
+    private static long number(TelemetryRecord r, String key) {
+        Object value = r.getAttributes().get(key);
+        if (value instanceof Number n) {
+            return n.longValue();
+        }
+        return 0;
     }
 
     public long editBurstCount() {
@@ -151,39 +164,72 @@ public class TelemetryAggregator {
     }
 
     public long totalEdits() {
-        return editBursts().stream().mapToLong(r -> longAttr(r, "edits")).sum();
+        long total = 0;
+        for (TelemetryRecord burst : editBursts()) {
+            total += number(burst, "edits");
+        }
+        return total;
     }
 
-    /** Typing cadence: average milliseconds between consecutive edits while typing. */
+    // Average milliseconds between two edits in a row.
     public double typingCadenceMs() {
-        long gaps = editBursts().stream().mapToLong(r -> longAttr(r, "gapSumMs")).sum();
-        long intervals = editBursts().stream().mapToLong(r -> Math.max(0, longAttr(r, "edits") - 1)).sum();
-        return intervals == 0 ? 0.0 : (double) gaps / intervals;
+        long totalGapMs = 0;
+        long gaps = 0;
+        for (TelemetryRecord burst : editBursts()) {
+            totalGapMs += number(burst, "gapSumMs");
+            gaps += Math.max(0, number(burst, "edits") - 1);
+        }
+        if (gaps == 0) {
+            return 0.0;
+        }
+        return (double) totalGapMs / gaps;
     }
 
-    /** Edit frequency: edits per minute of active time. */
     public double editsPerActiveMinute() {
         double minutes = activeTime().toMillis() / 60000.0;
-        return minutes == 0 ? 0.0 : totalEdits() / minutes;
+        if (minutes == 0) {
+            return 0.0;
+        }
+        return totalEdits() / minutes;
     }
 
-    // ---------- progression timeline ----------
+    // Creation timeline
 
-    /** Project creation, class creations and method additions in time order. */
+    // Project created, classes created and methods added, oldest first.
     public List<Map<String, Object>> creationTimeline() {
-        return records.stream()
-                .filter(r -> ClassTracker.CLASS_CREATED.equals(r.getEventType())
-                          || ClassTracker.METHOD_ADDED.equals(r.getEventType())
-                          || PackageEventAdapter.PROJECT_CREATED.equals(r.getEventType()))
-                .sorted(Comparator.comparing(TelemetryRecord::getTimestamp,
-                        Comparator.nullsLast(Comparator.naturalOrder())))
-                .map(r -> {
-                    Map<String, Object> m = new LinkedHashMap<>();
-                    m.put("time", r.getTimestamp() == null ? null : r.getTimestamp().toString());
-                    m.put("event", r.getEventType());
-                    m.putAll(r.getAttributes());
-                    return m;
-                })
-                .toList();
+        List<TelemetryRecord> created = new ArrayList<>();
+        for (TelemetryRecord r : records) {
+            String type = r.getEventType();
+            if (ClassTracker.CLASS_CREATED.equals(type)
+                    || ClassTracker.METHOD_ADDED.equals(type)
+                    || PackageEventAdapter.PROJECT_CREATED.equals(type)) {
+                created.add(r);
+            }
+        }
+        created.sort((a, b) -> compareTimes(a.getTimestamp(), b.getTimestamp()));
+
+        List<Map<String, Object>> timeline = new ArrayList<>();
+        for (TelemetryRecord r : created) {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("time", r.getTimestamp() == null ? null : r.getTimestamp().toString());
+            entry.put("event", r.getEventType());
+            entry.putAll(r.getAttributes());
+            timeline.add(entry);
+        }
+        return timeline;
+    }
+
+    // Records without a time go last.
+    private static int compareTimes(Instant a, Instant b) {
+        if (a == null && b == null) {
+            return 0;
+        }
+        if (a == null) {
+            return 1;
+        }
+        if (b == null) {
+            return -1;
+        }
+        return a.compareTo(b);
     }
 }
